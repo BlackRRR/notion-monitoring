@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	bot2 "github.com/BlackRRR/notion-monitoring/internal/app/bot"
 	client2 "github.com/BlackRRR/notion-monitoring/internal/app/client"
 	"github.com/BlackRRR/notion-monitoring/internal/app/repository"
@@ -9,7 +10,6 @@ import (
 	"github.com/BlackRRR/notion-monitoring/internal/cfg"
 	"github.com/BlackRRR/notion-monitoring/internal/model"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/jackc/pgx/v4/pgxpool"
 	"log"
 	"os"
 	"os/signal"
@@ -21,22 +21,17 @@ func main() {
 	ctx := context.Background()
 	model.DownloadAdminSettings()
 
-	bot, update := startBot()
-	startHandlers(bot, update)
-
-	token, err := os.ReadFile("./config/token.txt")
-	if err != nil {
-		log.Println(err)
-	}
-
 	config, err := cfg.NewConfig()
 	if err != nil {
 		log.Println(err)
 	}
 
-	dbConn, err := pgxpool.ConnectConfig(ctx, config.PGConfig)
+	bot, update := startBot(config.TGConfig)
+	startHandlers(bot, update)
+
+	dbConn, err := sql.Open("mysql", config.DBConn)
 	if err != nil {
-		log.Fatalf("failed to init postgres %s", err.Error())
+		return
 	}
 
 	rep, err := repository.NewRepository(ctx, dbConn)
@@ -46,17 +41,15 @@ func main() {
 
 	newService := service.NewService(rep, bot)
 
-	client := client2.NewClient(newService, string(token))
+	client := client2.NewClient(newService, config.NotionSecretKey)
 
 	err = client.StartPages(ctx)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	time.Sleep(time.Second)
-
 	go func() {
-		for range time.Tick(time.Second * 5) {
+		for range time.Tick(time.Second * 30) {
 			err := client.StartClient(ctx)
 			if err != nil {
 				log.Println(err)
@@ -71,13 +64,8 @@ func main() {
 	log.Printf("shutdown all process on '%s' system signal\n", sig.String())
 }
 
-func startBot() (*tgbotapi.BotAPI, tgbotapi.UpdatesChannel) {
-	file, err := os.ReadFile("./config/TG_token.txt")
-	if err != nil {
-		return nil, nil
-	}
-
-	bot, err := tgbotapi.NewBotAPI(string(file))
+func startBot(token string) (*tgbotapi.BotAPI, tgbotapi.UpdatesChannel) {
+	bot, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		log.Panic(err)
 	}

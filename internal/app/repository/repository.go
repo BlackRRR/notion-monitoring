@@ -2,42 +2,40 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"github.com/BlackRRR/notion-monitoring/internal/model"
-	"github.com/jackc/pgx/v4"
-	"github.com/jackc/pgx/v4/pgxpool"
+	"github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
 )
 
 type Repository struct {
 	ctx context.Context
 
-	pool *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewRepository(ctx context.Context, pool *pgxpool.Pool) (*Repository, error) {
+func NewRepository(ctx context.Context, db *sql.DB) (*Repository, error) {
 	repository := &Repository{
-		ctx:  ctx,
-		pool: pool,
+		ctx: ctx,
+		db:  db,
 	}
 
-	_, err := repository.pool.Exec(ctx, `
-CREATE TABLE IF NOT EXISTS pages(
-page_id text UNIQUE,
-status text,
-description text);`)
+	_, err := repository.db.Exec("CREATE TABLE IF NOT EXISTS pages (page_id VARCHAR(512), status text, description text);")
 	if err != nil {
-		return nil, errors.Wrap(err, "Postgres: failed to create table")
+		return nil, errors.Wrap(err, "mysql: failed to create table")
 	}
 
 	return repository, nil
 }
 
 func (r *Repository) CreateOrUpdateNotionPages(pageId, status, description string) error {
-	_, err := r.pool.Exec(r.ctx, `INSERT INTO pages (page_id, status, description) VALUES ($1,$2,$3)`, pageId, status, description)
+	_, err := r.db.Exec(`INSERT INTO pages (page_id, status, description) VALUES (?,?,?)`, pageId, status, description)
 	if err != nil {
-		if err.Error() == "ERROR: duplicate key value violates unique constraint \"pages_page_id_key\" (SQLSTATE 23505)" {
+		var mysqlErr *mysql.MySQLError
+		if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
 			return r.UpdateNotionPage(pageId, status, description)
 		}
+
 		return err
 	}
 
@@ -45,7 +43,7 @@ func (r *Repository) CreateOrUpdateNotionPages(pageId, status, description strin
 }
 
 func (r *Repository) UpdateNotionPage(pageId, status, description string) error {
-	_, err := r.pool.Exec(r.ctx, `UPDATE pages SET status = $1, description = $2 WHERE page_id = $3`, status, description, pageId)
+	_, err := r.db.Exec(`UPDATE pages SET status = ?, description = ? WHERE page_id = ?`, status, description, pageId)
 	if err != nil {
 		return err
 	}
@@ -54,7 +52,7 @@ func (r *Repository) UpdateNotionPage(pageId, status, description string) error 
 }
 
 func (r *Repository) GetPages() ([]model.Page, error) {
-	rows, err := r.pool.Query(r.ctx, `SELECT * FROM pages`)
+	rows, err := r.db.Query(`SELECT * FROM pages`)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +65,7 @@ func (r *Repository) GetPages() ([]model.Page, error) {
 	return pages, nil
 }
 
-func ReadRows(rows pgx.Rows) ([]model.Page, error) {
+func ReadRows(rows *sql.Rows) ([]model.Page, error) {
 	var page model.Page
 	var pages []model.Page
 
